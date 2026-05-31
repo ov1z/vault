@@ -1,0 +1,19 @@
+# --- build artifacts ---
+build/
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+
+# --- editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- vault data: NEVER commit ---
+.vault/
+store.json
+*.vault
+
+# Note: vault.ico and vault_logo.png are source assets and ARE tracked.

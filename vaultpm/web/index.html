@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Defense-in-depth: no inline scripts, no external network. Even if a value
+       were ever injected, it could neither run inline nor phone home. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
+  <title>Vault</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ============ Gate: setup / unlock ============ -->
+  <div id="gate" class="gate hidden">
+    <div class="gate-card">
+      <div class="brand">
+        <span class="mark" data-ic="shield"></span>
+        <span class="wordmark">Vault</span>
+      </div>
+
+      <form id="setup-form" class="gate-form hidden" autocomplete="off">
+        <p class="gate-hint">マスターパスワードを設定します。これは復元できません。忘れると保管庫は開けません。</p>
+        <label class="lbl">マスターパスワード</label>
+        <input type="password" id="setup-pw" autocomplete="new-password" spellcheck="false">
+        <div class="meter"><div id="setup-meter-bar" class="meter-bar"></div></div>
+        <label class="lbl">確認のため再入力</label>
+        <input type="password" id="setup-pw2" autocomplete="new-password" spellcheck="false">
+        <label class="lbl">PIM <span class="muted">(任意・第2の秘密。空欄で標準)</span></label>
+        <input type="number" id="setup-pim" min="0" step="1" inputmode="numeric" placeholder="0">
+        <p class="kdf-hint" id="setup-iter"></p>
+        <button type="submit" class="btn primary block">保管庫を作成</button>
+        <p class="err" id="setup-error"></p>
+      </form>
+
+      <form id="unlock-form" class="gate-form hidden" autocomplete="off">
+        <label class="lbl">マスターパスワード</label>
+        <input type="password" id="unlock-pw" autocomplete="current-password" spellcheck="false" autofocus>
+        <label class="lbl">PIM <span class="muted">(設定した場合のみ)</span></label>
+        <input type="number" id="unlock-pim" min="0" step="1" inputmode="numeric" placeholder="0">
+        <button type="submit" class="btn primary block">ロック解除</button>
+        <p class="err" id="unlock-error"></p>
+      </form>
+    </div>
+    <p class="gate-foot">データはこの PC 内にのみ AES-256-GCM で暗号化保存されます。</p>
+  </div>
+
+  <!-- ============ Main app ============ -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand sm">
+        <span class="mark" data-ic="shield"></span>
+        <span class="wordmark">Vault</span>
+      </div>
+      <div class="search">
+        <span class="search-ic" data-ic="search"></span>
+        <input type="search" id="search" placeholder="検索" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="topbar-right">
+        <button class="btn primary" id="new-btn"><span data-ic="plus"></span>新規</button>
+        <button class="icon-btn lg" id="menu-btn" title="メニュー" data-ic="more"></button>
+        <button class="icon-btn lg" id="lock-btn" title="ロック (Ctrl+L)" data-ic="lock"></button>
+        <div class="menu hidden" id="menu">
+          <div class="menu-row">
+            <span>自動ロック</span>
+            <select id="autolock-sel">
+              <option value="0">オフ</option>
+              <option value="1">1 分</option>
+              <option value="5">5 分</option>
+              <option value="15">15 分</option>
+              <option value="30">30 分</option>
+            </select>
+          </div>
+          <button id="menu-changepw"><span data-ic="key"></span>マスターパスワード変更</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="list-head"><span id="count">0 件</span></div>
+        <ul id="item-list" class="item-list"></ul>
+        <div id="empty-list" class="empty hidden">
+          <p>まだ項目がありません</p>
+          <button class="btn primary" id="empty-new"><span data-ic="plus"></span>最初の項目を追加</button>
+        </div>
+      </aside>
+
+      <section class="detail" id="detail">
+        <div class="detail-empty" id="detail-empty">
+          <span class="ghost-mark" data-ic="shield"></span>
+          <p>左の一覧から項目を選択</p>
+        </div>
+        <div class="detail-body hidden" id="detail-body"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============ Item editor modal ============ -->
+  <div id="modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2 id="modal-title">新規項目</h2>
+      <form id="item-form" autocomplete="off">
+        <input type="hidden" id="f-id">
+        <label class="lbl">タイトル <span class="req">*</span></label>
+        <input type="text" id="f-title" placeholder="例: GitHub" autocomplete="off" spellcheck="false">
+
+        <label class="lbl">ユーザー名 / メール</label>
+        <input type="text" id="f-username" autocomplete="off" spellcheck="false">
+
+        <label class="lbl">パスワード</label>
+        <div class="field-inline">
+          <input type="text" id="f-password" class="mono" autocomplete="off" spellcheck="false">
+          <button type="button" class="icon-btn" id="f-gen" title="生成" data-ic="refresh"></button>
+        </div>
+        <div class="gen-opts" id="gen-opts">
+          <label class="range">長さ <span id="gen-len-val">20</span>
+            <input type="range" id="gen-len" min="6" max="64" value="20">
+          </label>
+          <div class="gen-toggles">
+            <label><input type="checkbox" id="gen-upper" checked> A-Z</label>
+            <label><input type="checkbox" id="gen-lower" checked> a-z</label>
+            <label><input type="checkbox" id="gen-digit" checked> 0-9</label>
+            <label><input type="checkbox" id="gen-sym" checked> !@#</label>
+            <label><input type="checkbox" id="gen-amb"> 紛らわしい文字を除外</label>
+          </div>
+        </div>
+
+        <label class="lbl">2FA シークレット / otpauth URI <span class="muted">(任意)</span></label>
+        <input type="text" id="f-totp" class="mono" placeholder="JBSWY3DP… または otpauth://…" autocomplete="off" spellcheck="false">
+        <p class="totp-hint" id="f-totp-hint"></p>
+
+        <label class="lbl">URL</label>
+        <input type="text" id="f-url" placeholder="https://" autocomplete="off" spellcheck="false">
+
+        <label class="lbl">メモ</label>
+        <textarea id="f-notes" rows="3"></textarea>
+
+        <p class="err" id="form-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="modal-cancel">キャンセル</button>
+          <button type="submit" class="btn primary" id="modal-save">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ Change-password modal ============ -->
+  <div id="cpw-modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2>マスターパスワード変更</h2>
+      <form id="cpw-form" autocomplete="off">
+        <label class="lbl">現在のパスワード</label>
+        <input type="password" id="cpw-old" autocomplete="current-password">
+        <label class="lbl">現在の PIM <span class="muted">(設定していなければ空欄)</span></label>
+        <input type="number" id="cpw-old-pim" min="0" step="1" inputmode="numeric" placeholder="0">
+        <label class="lbl">新しいパスワード</label>
+        <input type="password" id="cpw-new" autocomplete="new-password">
+        <label class="lbl">新しいパスワード（確認）</label>
+        <input type="password" id="cpw-new2" autocomplete="new-password">
+        <label class="lbl">新しい PIM <span class="muted">(任意)</span></label>
+        <input type="number" id="cpw-new-pim" min="0" step="1" inputmode="numeric" placeholder="0">
+        <p class="kdf-hint" id="cpw-iter"></p>
+        <p class="err" id="cpw-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="cpw-cancel">キャンセル</button>
+          <button type="submit" class="btn primary">変更</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- confirm dialog -->
+  <div id="confirm" class="modal-backdrop hidden">
+    <div class="modal small">
+      <p id="confirm-text"></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="confirm-no">キャンセル</button>
+        <button class="btn danger" id="confirm-yes">削除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
